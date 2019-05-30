@@ -127,7 +127,7 @@ public:
 												"I'm server now. Call me later."};
 
 			std::cout << "[Proceed1M]: mcounter = " << mcounter << std::endl;
-			if(ctx_.IsCancelled() || mcounter >= greeting.size())
+			if(/*ctx_.IsCancelled() ||*/ mcounter >= greeting.size())
 			{
 				std::cout << "[Proceed1M]: Trying finish" << std::endl;
 				status_ = FINISH;
@@ -245,7 +245,7 @@ class CallDataMM: public CommonCallData
 												"Haven't seen you for thousand years.",
 												"How are you?",
 												"I'm server now. Call me later."};
-				if(!ok || mcounter >= greeting.size() || ctx_.IsCancelled())
+				if(!ok || mcounter >= greeting.size()/* || ctx_.IsCancelled()*/)
 				{
 					std::cout << "[ProceedMM]: Trying finish" << std::endl;
 					status_ = FINISH;

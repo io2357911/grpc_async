@@ -1,47 +1,46 @@
-# Minimum CMake required
-cmake_minimum_required(VERSION 2.8)
+project(grpc-cmake-example)
+cmake_minimum_required(VERSION 3.2)
 
-# Project
-project(grpcAsync CXX)
+add_compile_options(-std=c++11)
 
-# Protobuf
-set(protobuf_MODULE_COMPATIBLE TRUE)
-find_package(protobuf CONFIG REQUIRED)
-message(STATUS "Using protobuf ${protobuf_VERSION}")
+# GRPC and Protocol Buffers libraries location
+list(APPEND CMAKE_PREFIX_PATH "/opt/grpc" "/opt/protobuf")
 
-# gRPC
-find_package(gRPC CONFIG REQUIRED)
-message(STATUS "Using gRPC ${gRPC_VERSION}")
+# Cmake find modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
-# gRPC C++ plugin
-get_target_property(gRPC_CPP_PLUGIN_EXECUTABLE gRPC::grpc_cpp_plugin
-    IMPORTED_LOCATION_RELEASE)
+find_package(Protobuf REQUIRED)
+find_package(GRPC REQUIRED)
 
-# Proto file
-get_filename_component(hw_proto "helloworld.proto" ABSOLUTE)
-get_filename_component(hw_proto_path "${hw_proto}" PATH)
+set(PROTOS
+    ${CMAKE_CURRENT_SOURCE_DIR}/helloworld.proto
+)
 
-# Generated sources
-protobuf_generate_cpp(hw_proto_srcs hw_proto_hdrs "${hw_proto}")
-set(hw_grpc_srcs "${CMAKE_CURRENT_BINARY_DIR}/helloworld.grpc.pb.cc")
-set(hw_grpc_hdrs "${CMAKE_CURRENT_BINARY_DIR}/helloworld.grpc.pb.h")
-add_custom_command(
-      OUTPUT "${hw_grpc_srcs}" "${hw_grpc_hdrs}"
-      COMMAND protobuf::protoc
-      ARGS --grpc_out "${CMAKE_CURRENT_BINARY_DIR}" -I "${hw_proto_path}"
-        --plugin=protoc-gen-grpc="${gRPC_CPP_PLUGIN_EXECUTABLE}"
-        "${hw_proto}"
-      DEPENDS "${hw_proto}")
+set(PROTO_SRC_DIR ${CMAKE_CURRENT_BINARY_DIR}/proto-src)
+file(MAKE_DIRECTORY ${PROTO_SRC_DIR})
+include_directories(${PROTO_SRC_DIR})
 
-# Generated include directory
-include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS ${PROTO_SRC_DIR} ${PROTOS})
+grpc_generate_cpp(GRPC_SRCS GRPC_HDRS ${PROTO_SRC_DIR} ${PROTOS})
 
-foreach(_target
-  grpc_async_client grpc_async_server)
-  add_executable(${_target} "${_target}.cc"
-    ${hw_proto_srcs}
-    ${hw_grpc_srcs})
-  target_link_libraries(${_target}
+# Building server
+add_executable(grpc_async_server
+    ${CMAKE_CURRENT_SOURCE_DIR}/grpc_async_server.cc
+    ${PROTO_SRCS}
+    ${GRPC_SRCS}
+)
+target_link_libraries(grpc_async_server
+    gRPC::grpc++_reflection
     protobuf::libprotobuf
-    gRPC::grpc++_unsecure)
-endforeach()
+)
+
+# Building client
+add_executable(grpc_async_client
+    ${CMAKE_CURRENT_SOURCE_DIR}/grpc_async_client.cc
+    ${PROTO_SRCS}
+    ${GRPC_SRCS}
+)
+target_link_libraries(grpc_async_client
+    gRPC::grpc++_reflection
+    protobuf::libprotobuf
+)
