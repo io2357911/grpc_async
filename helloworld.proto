@@ -29,7 +29,7 @@ service Greeter {
   rpc GladToSeeYou (stream HelloRequest) returns (HelloReply) {}
   rpc BothGladToSee (stream HelloRequest) returns (stream HelloReply) {}
 
-  rpc Subscribe (SubscribeRequest) returns (stream SubscribeResponse) {}
+  rpc Subscribe (SubscribeRequest) returns (stream SubscribeReply) {}
 }
 
 // The request message containing the user's name.
@@ -46,6 +46,6 @@ message SubscribeRequest {
   string name = 1;
 }
 
-message SubscribeResponse {
+message SubscribeReply {
   string message = 1;
 }

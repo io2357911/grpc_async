@@ -7,8 +7,10 @@
 #include <cmath>
 #include <functional>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include "assert.h"
 
 #include <grpc++/grpc++.h>
@@ -27,8 +29,8 @@ using grpc::Status;
 using helloworld::Greeter;
 using helloworld::HelloReply;
 using helloworld::HelloRequest;
+using helloworld::SubscribeReply;
 using helloworld::SubscribeRequest;
-using helloworld::SubscribeResponse;
 
 class CommonCallData
 {
@@ -317,9 +319,9 @@ public:
         m_context = NULL;
     }
 
-    void postToClient()
+    void send(const T& data)
     {
-        m_writer->Write(m_data, m_tag);
+        m_writer->Write(data, m_tag);
     }
 
     bool isAlive()
@@ -332,23 +334,50 @@ private:
     ServerAsyncWriter<T>* m_writer;
     void* m_tag;
     ServerContext* m_context;
-    T m_data;
 };
+
+class SubscribeCallData;
+
+class ISubscribeCallDataHolder
+{
+public:
+    virtual void setSubscribeCallData(SubscribeCallData* call) = 0;
+    virtual void removeSubscribeCallData(SubscribeCallData* call) = 0;
+};
+
 class SubscribeCallData : public CommonCallData
 {
-    ServerAsyncWriter<SubscribeResponse> responder_;
+    ISubscribeCallDataHolder* server_;
+    ServerAsyncWriter<SubscribeReply> responder_;
     unsigned mcounter;
     bool new_responder_created;
     // What we get from the client.
     SubscribeRequest request_;
     // What we send back to the client.
-    SubscribeResponse reply_;
+    SubscribeReply reply_;
+
+    using Client = GrpcClient<SubscribeReply>;
+    using Client_ptr = std::shared_ptr<Client>;
+    Client_ptr client_;
 
 public:
-    SubscribeCallData(Greeter::AsyncService* service, ServerCompletionQueue* cq)
-        : CommonCallData(service, cq), responder_(&ctx_), mcounter(0), new_responder_created(false)
+    SubscribeCallData(
+        ISubscribeCallDataHolder* server, Greeter::AsyncService* service, ServerCompletionQueue* cq)
+        : CommonCallData(service, cq),
+          server_(server),
+          responder_(&ctx_),
+          mcounter(0),
+          new_responder_created(false)
     {
         Proceed();
+    }
+
+    void sendReply(const SubscribeReply& reply)
+    {
+        if (client_)
+        {
+            client_->send(reply);
+        }
     }
 
     virtual void Proceed(bool = true) override
@@ -363,39 +392,25 @@ public:
         {
             if (!new_responder_created)
             {
-                new CallData1M(service_, cq_);
+                new SubscribeCallData(server_, service_, cq_);
                 new_responder_created = true;
                 std::cout << "[ProceedSubscribe]: request message = " << request_.name()
                           << std::endl;
-            }
-            std::vector<std::string> greeting = {std::string(prefix + request_.name() + "!"),
-                "I'm very glad to see you!", "Haven't seen you for thousand years.",
-                "I'm server now. Call me later."};
 
-            std::cout << "[ProceedSubscribe]: mcounter = " << mcounter << std::endl;
-            if (/*ctx_.IsCancelled() ||*/ mcounter >= greeting.size())
-            {
-                std::cout << "[ProceedSubscribe]: Trying finish" << std::endl;
-                status_ = FINISH;
-                responder_.Finish(Status(), (void*)this);
-            }
-            else
-            {
-                reply_.set_message(greeting.at(mcounter));
-                std::cout << "[ProceedSubscribe]: Writing" << std::endl;
-                responder_.Write(reply_, (void*)this);
-                ++mcounter;
+                client_ = std::make_shared<Client>(&responder_, this, &ctx_);
+                server_->setSubscribeCallData(this);
             }
         }
         else if (status_ == FINISH)
         {
             std::cout << "[ProceedSubscribe]: Good Bye" << std::endl;
+            server_->removeSubscribeCallData(this);
             delete this;
         }
     }
 };
 
-class ServerImpl
+class ServerImpl : public ISubscribeCallDataHolder
 {
 public:
     ~ServerImpl()
@@ -428,7 +443,7 @@ public:
         new CallData1M(&service_, cq_.get());
         new CallDataM1(&service_, cq_.get());
         new CallDataMM(&service_, cq_.get());
-        new SubscribeCallData(&service_, cq_.get());
+        new SubscribeCallData(this, &service_, cq_.get());
 
         void* tag;  // uniquely identifies a request.
         bool ok;
@@ -440,15 +455,54 @@ public:
         }
     }
 
+    void sendSubscribeReply(const std::string& message)
+    {
+        std::lock_guard<std::mutex> lock(subscribeCallMutex_);
+        if (subscribeCall_)
+        {
+            SubscribeReply reply;
+            reply.set_message(message);
+            subscribeCall_->sendReply(reply);
+        }
+    }
+
+public:  // ISubscribeCallDataHolder
+    void setSubscribeCallData(SubscribeCallData* call) override
+    {
+        std::lock_guard<std::mutex> lock(subscribeCallMutex_);
+        if (subscribeCall_)
+            subscribeCall_ = call;
+    }
+    void removeSubscribeCallData(SubscribeCallData* call) override
+    {
+        std::lock_guard<std::mutex> lock(subscribeCallMutex_);
+        if (call == subscribeCall_)
+            subscribeCall_ = nullptr;
+    }
+
 private:
     std::unique_ptr<ServerCompletionQueue> cq_;
     Greeter::AsyncService service_;
     std::unique_ptr<Server> server_;
+
+    SubscribeCallData* subscribeCall_ = nullptr;
+    std::mutex subscribeCallMutex_;
 };
 
 int main(int argc, char* argv[])
 {
     ServerImpl server;
+
+    std::thread notifyThread([&]() {
+        while (1)
+        {
+            std::string message = "async hi";
+            std::cout << "send message: " << message << std::endl;
+            server.sendSubscribeReply(message);
+            sleep(1);
+        }
+    });
+
     server.Run();
 }
 
