@@ -470,8 +470,7 @@ public:  // ISubscribeCallDataHolder
     void setSubscribeCallData(SubscribeCallData* call) override
     {
         std::lock_guard<std::mutex> lock(subscribeCallMutex_);
-        if (subscribeCall_)
-            subscribeCall_ = call;
+        subscribeCall_ = call;
     }
     void removeSubscribeCallData(SubscribeCallData* call) override
     {

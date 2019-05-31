@@ -27,6 +27,8 @@ using grpc::Status;
 using helloworld::Greeter;
 using helloworld::HelloReply;
 using helloworld::HelloRequest;
+using helloworld::SubscribeReply;
+using helloworld::SubscribeRequest;
 
 class AbstractAsyncClientCall
 {
@@ -44,10 +46,18 @@ public:
     virtual ~AbstractAsyncClientCall()
     {
     }
-    HelloReply reply;
+
+    virtual void Proceed(bool = true) = 0;
+
+protected:
     ClientContext context;
     Status status;
     CallStatus callStatus;
+};
+
+class HelloAsyncClientCall : public AbstractAsyncClientCall
+{
+public:
     void printReply(const char* from)
     {
         if (!reply.message().empty())
@@ -55,17 +65,19 @@ public:
         else
             std::cout << "[" << from << "]: reply message empty" << std::endl;
     }
-    virtual void Proceed(bool = true) = 0;
+
+protected:
+    HelloReply reply;
 };
 
-class AsyncClientCall : public AbstractAsyncClientCall
+class AsyncClientCall : public HelloAsyncClientCall
 {
     std::unique_ptr<ClientAsyncResponseReader<HelloReply> > responder;
 
 public:
     AsyncClientCall(
         const HelloRequest& request, CompletionQueue& cq_, std::unique_ptr<Greeter::Stub>& stub_)
-        : AbstractAsyncClientCall()
+        : HelloAsyncClientCall()
     {
         std::cout << "[Proceed11]: new client 1-1" << std::endl;
         responder = stub_->AsyncSayHello(&context, request, &cq_);
@@ -87,14 +99,14 @@ public:
     }
 };
 
-class AsyncClientCall1M : public AbstractAsyncClientCall
+class AsyncClientCall1M : public HelloAsyncClientCall
 {
     std::unique_ptr<ClientAsyncReader<HelloReply> > responder;
 
 public:
     AsyncClientCall1M(
         const HelloRequest& request, CompletionQueue& cq_, std::unique_ptr<Greeter::Stub>& stub_)
-        : AbstractAsyncClientCall()
+        : HelloAsyncClientCall()
     {
         std::cout << "[Proceed1M]: new client 1-M" << std::endl;
         responder = stub_->AsyncGladToSeeMe(&context, request, &cq_, (void*)this);
@@ -122,7 +134,7 @@ public:
     }
 };
 
-class AsyncClientCallM1 : public AbstractAsyncClientCall
+class AsyncClientCallM1 : public HelloAsyncClientCall
 {
     std::unique_ptr<ClientAsyncWriter<HelloRequest> > responder;
     unsigned mcounter;
@@ -130,7 +142,7 @@ class AsyncClientCallM1 : public AbstractAsyncClientCall
 
 public:
     AsyncClientCallM1(CompletionQueue& cq_, std::unique_ptr<Greeter::Stub>& stub_)
-        : AbstractAsyncClientCall(), mcounter(0), writing_mode_(true)
+        : HelloAsyncClientCall(), mcounter(0), writing_mode_(true)
     {
         std::cout << "[ProceedM1]: new client M-1" << std::endl;
         responder = stub_->AsyncGladToSeeYou(&context, &reply, &cq_, (void*)this);
@@ -178,7 +190,7 @@ public:
     }
 };
 
-class AsyncClientCallMM : public AbstractAsyncClientCall
+class AsyncClientCallMM : public HelloAsyncClientCall
 {
     std::unique_ptr<ClientAsyncReaderWriter<HelloRequest, HelloReply> > responder;
     unsigned mcounter;
@@ -186,7 +198,7 @@ class AsyncClientCallMM : public AbstractAsyncClientCall
 
 public:
     AsyncClientCallMM(CompletionQueue& cq_, std::unique_ptr<Greeter::Stub>& stub_)
-        : AbstractAsyncClientCall(), mcounter(0), writing_mode_(true)
+        : HelloAsyncClientCall(), mcounter(0), writing_mode_(true)
     {
         std::cout << "[ProceedMM]: new client M-M" << std::endl;
         responder = stub_->AsyncBothGladToSee(&context, &cq_, (void*)this);
@@ -238,6 +250,50 @@ public:
     }
 };
 
+class SubscribeAsyncClientCall : public AbstractAsyncClientCall
+{
+    std::unique_ptr<ClientAsyncReader<SubscribeReply> > responder;
+    SubscribeReply reply;
+
+public:
+    SubscribeAsyncClientCall(const SubscribeRequest& request, CompletionQueue& cq_,
+        std::unique_ptr<Greeter::Stub>& stub_)
+        : AbstractAsyncClientCall()
+    {
+        std::cout << "[ProceedSubscribe]: new client 1-M" << std::endl;
+        responder = stub_->AsyncSubscribe(&context, request, &cq_, (void*)this);
+        callStatus = PROCESS;
+    }
+    virtual void Proceed(bool ok = true) override
+    {
+        if (callStatus == PROCESS)
+        {
+            if (!ok)
+            {
+                responder->Finish(&status, (void*)this);
+                callStatus = FINISH;
+                return;
+            }
+            responder->Read(&reply, (void*)this);
+            printReply("ProceedSubscribe");
+        }
+        else if (callStatus == FINISH)
+        {
+            std::cout << "[ProceedSubscribe]: Good Bye" << std::endl;
+            delete this;
+        }
+        return;
+    }
+
+    void printReply(const char* from)
+    {
+        if (!reply.message().empty())
+            std::cout << "[" << from << "]: reply message = " << reply.message() << std::endl;
+        else
+            std::cout << "[" << from << "]: reply message empty" << std::endl;
+    }
+};
+
 class GreeterClient
 {
 public:
@@ -270,6 +326,13 @@ public:
         new AsyncClientCallMM(cq_, stub_);
     }
 
+    void Subscribe(const std::string& name)
+    {
+        SubscribeRequest request;
+        request.set_name(name);
+        new SubscribeAsyncClientCall(request, cq_, stub_);
+    }
+
     void AsyncCompleteRpc()
     {
         void* got_tag;
@@ -298,9 +361,10 @@ int main(int argc, char* argv[])
         grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials()));
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
     greeter.SayHello("world");
-    greeter.GladToSeeMe("client");
-    greeter.GladToSeeYou();
-    greeter.BothGladToSee();
+    // greeter.GladToSeeMe("client");
+    // greeter.GladToSeeYou();
+    // greeter.BothGladToSee();
+    greeter.Subscribe("me");
     thread_.join();
 }
 
