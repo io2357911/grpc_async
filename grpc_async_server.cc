@@ -26,8 +26,9 @@ using grpc::ServerCompletionQueue;
 using grpc::Status;
 using helloworld::HelloRequest;
 using helloworld::HelloReply;
+using helloworld::SubscribeRequest;
+using helloworld::SubscribeResponse;
 using helloworld::Greeter;
-
 
 class CommonCallData
 {
@@ -41,10 +42,6 @@ class CommonCallData
     // of compression, authentication, as well as to send metadata back to the
     // client.
     ServerContext ctx_;
-    // What we get from the client.
-    HelloRequest request_;
-    // What we send back to the client.
-    HelloReply reply_;
 	// Let's implement a tiny state machine with the following states.
     enum CallStatus { CREATE, PROCESS, FINISH };
     CallStatus status_;  // The current serving state.
@@ -66,6 +63,11 @@ class CommonCallData
 class CallData: public CommonCallData
 {
     ServerAsyncResponseWriter<HelloReply> responder_;
+    // What we get from the client.
+    HelloRequest request_;
+    // What we send back to the client.
+    HelloReply reply_;
+
 	public:
 	CallData(Greeter::AsyncService* service, ServerCompletionQueue* cq):
 		CommonCallData(service, cq), responder_(&ctx_){Proceed();}
@@ -101,6 +103,11 @@ class CallData1M: public CommonCallData
     ServerAsyncWriter<HelloReply> responder_;
 	unsigned mcounter;
 	bool new_responder_created;
+    // What we get from the client.
+    HelloRequest request_;
+    // What we send back to the client.
+    HelloReply reply_;
+
 public:
 	CallData1M(Greeter::AsyncService* service, ServerCompletionQueue* cq):
 		CommonCallData(service, cq), responder_(&ctx_), mcounter(0), new_responder_created(false){ Proceed() ;}
@@ -154,6 +161,11 @@ class CallDataM1: public CommonCallData
 {
     ServerAsyncReader<HelloReply, HelloRequest> responder_;
 	bool new_responder_created;
+    // What we get from the client.
+    HelloRequest request_;
+    // What we send back to the client.
+    HelloReply reply_;
+
 	public:
 	CallDataM1(Greeter::AsyncService* service, ServerCompletionQueue* cq):
 		CommonCallData(service, cq), responder_(&ctx_), new_responder_created(false){Proceed();}
@@ -204,6 +216,11 @@ class CallDataMM: public CommonCallData
 	unsigned mcounter;
 	bool writing_mode_;
 	bool new_responder_created;
+    // What we get from the client.
+    HelloRequest request_;
+    // What we send back to the client.
+    HelloReply reply_;
+
 	public:
 	CallDataMM(Greeter::AsyncService* service, ServerCompletionQueue* cq):
 		CommonCallData(service, cq), responder_(&ctx_), mcounter(0), writing_mode_(false), new_responder_created(false){Proceed();}
@@ -267,6 +284,97 @@ class CallDataMM: public CommonCallData
 		}
 	}
 };
+template<class T>
+class GrpcClient
+{
+    public:
+        GrpcClient (ServerAsyncWriter<T>* writer, void *tag, ServerContext *context) :
+            m_writer(writer), m_tag(tag), m_context(context)
+        {
+        }
+
+        ~GrpcClient ()
+        {
+            std::cout << "deleting GrpcClient" << std::endl;
+            m_writer = NULL;
+            m_context = NULL;
+        }
+     
+        void postToClient ()
+        {
+            m_writer->Write (m_data, m_tag);    
+        }
+
+        bool isAlive ()
+        {
+            //return (!m_context->IsCancelled ());            
+            return true;
+        }
+
+    private:
+    ServerAsyncWriter<T>*       m_writer;   
+    void*                       m_tag; 
+    ServerContext*              m_context;
+    T                           m_data;
+
+};
+class SubscribeCallData: public CommonCallData
+{
+    ServerAsyncWriter<SubscribeResponse> responder_;
+	unsigned mcounter;
+	bool new_responder_created;
+    // What we get from the client.
+    SubscribeRequest request_;
+    // What we send back to the client.
+    SubscribeResponse reply_;
+
+public:
+	SubscribeCallData(Greeter::AsyncService* service, ServerCompletionQueue* cq):
+		CommonCallData(service, cq), responder_(&ctx_), mcounter(0), new_responder_created(false){ Proceed() ;}
+
+	virtual void Proceed(bool = true) override
+	{
+		if(status_ == CREATE)
+		{
+			std::cout << "[ProceedSubscribe]: New responder for 1-M mode" << std::endl;
+			service_->RequestSubscribe(&ctx_, &request_, &responder_, cq_, cq_, this);
+			status_ = PROCESS ;
+		}
+		else if(status_ == PROCESS)
+		{
+			if(!new_responder_created)
+			{
+				new CallData1M(service_, cq_);
+				new_responder_created = true ;
+				std::cout << "[ProceedSubscribe]: request message = " << request_.name() << std::endl;
+			}
+			std::vector<std::string> greeting = {std::string(prefix + request_.name() + "!"),
+												"I'm very glad to see you!",
+												"Haven't seen you for thousand years.",
+												"I'm server now. Call me later."};
+
+			std::cout << "[ProceedSubscribe]: mcounter = " << mcounter << std::endl;
+			if(/*ctx_.IsCancelled() ||*/ mcounter >= greeting.size())
+			{
+				std::cout << "[ProceedSubscribe]: Trying finish" << std::endl;
+				status_ = FINISH;
+				responder_.Finish(Status(), (void*)this);
+			}
+			else
+			{
+				reply_.set_message(greeting.at(mcounter));
+				std::cout << "[ProceedSubscribe]: Writing" << std::endl;
+				responder_.Write(reply_, (void*)this);
+				++mcounter;
+			}
+		}
+		else if(status_ == FINISH)
+		{
+			std::cout << "[ProceedSubscribe]: Good Bye" << std::endl;
+			delete this;
+		}
+	}
+};
 
 
 
@@ -303,6 +411,7 @@ public:
         new CallData1M(&service_, cq_.get());
         new CallDataM1(&service_, cq_.get());
         new CallDataMM(&service_, cq_.get());
+        new SubscribeCallData(&service_, cq_.get());
 
         void* tag;  // uniquely identifies a request.
         bool ok;
@@ -319,7 +428,6 @@ private:
 	Greeter::AsyncService service_;
 	std::unique_ptr<Server> server_;
 };
-
 
 int main(int argc, char* argv[])
 {
