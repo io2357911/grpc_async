@@ -250,15 +250,22 @@ public:
     }
 };
 
+class ISubscriber
+{
+public:
+    virtual void onSubscribeReply(const SubscribeReply& reply) = 0;
+};
+
 class SubscribeAsyncClientCall : public AbstractAsyncClientCall
 {
+    ISubscriber* client_;
     std::unique_ptr<ClientAsyncReader<SubscribeReply> > responder;
     SubscribeReply reply;
 
 public:
-    SubscribeAsyncClientCall(const SubscribeRequest& request, CompletionQueue& cq_,
-        std::unique_ptr<Greeter::Stub>& stub_)
-        : AbstractAsyncClientCall()
+    SubscribeAsyncClientCall(ISubscriber* server, const SubscribeRequest& request,
+        CompletionQueue& cq_, std::unique_ptr<Greeter::Stub>& stub_)
+        : AbstractAsyncClientCall(), client_(server)
     {
         std::cout << "[ProceedSubscribe]: new client 1-M" << std::endl;
         responder = stub_->AsyncSubscribe(&context, request, &cq_, (void*)this);
@@ -275,7 +282,7 @@ public:
                 return;
             }
             responder->Read(&reply, (void*)this);
-            printReply("ProceedSubscribe");
+            client_->onSubscribeReply(reply);
         }
         else if (callStatus == FINISH)
         {
@@ -284,20 +291,13 @@ public:
         }
         return;
     }
-
-    void printReply(const char* from)
-    {
-        if (!reply.message().empty())
-            std::cout << "[" << from << "]: reply message = " << reply.message() << std::endl;
-        else
-            std::cout << "[" << from << "]: reply message empty" << std::endl;
-    }
 };
 
-class GreeterClient
+class GreeterClient : public ISubscriber
 {
 public:
-    explicit GreeterClient(std::shared_ptr<Channel> channel) : stub_(Greeter::NewStub(channel))
+    explicit GreeterClient(std::shared_ptr<Channel> channel)
+        : stub_(Greeter::NewStub(channel)), subscriber_(nullptr)
     {
     }
 
@@ -330,7 +330,16 @@ public:
     {
         SubscribeRequest request;
         request.set_name(name);
-        new SubscribeAsyncClientCall(request, cq_, stub_);
+        new SubscribeAsyncClientCall(this, request, cq_, stub_);
+    }
+    void onSubscribeReply(const SubscribeReply& reply) override
+    {
+        if (subscriber_)
+            subscriber_->onSubscribeReply(reply);
+    }
+    void setSubscriber(ISubscriber* subscriber)
+    {
+        subscriber_ = subscriber;
     }
 
     void AsyncCompleteRpc()
@@ -353,18 +362,38 @@ private:
     // The producer-consumer queue we use to communicate asynchronously with the
     // gRPC runtime.
     CompletionQueue cq_;
+
+    ISubscriber* subscriber_;
+};
+
+class GreeterClientSubscriber : public ISubscriber
+{
+public:
+    void onSubscribeReply(const SubscribeReply& reply) override
+    {
+        if (!reply.message().empty())
+            std::cout << "[ProceedSubscribe]: reply message = " << reply.message() << std::endl;
+        else
+            std::cout << "[ProceedSubscribe]: reply message empty" << std::endl;
+    }
 };
 
 int main(int argc, char* argv[])
 {
     GreeterClient greeter(
         grpc::CreateChannel("localhost:50051", grpc::InsecureChannelCredentials()));
+
+    GreeterClientSubscriber subscriber;
+    greeter.setSubscriber(&subscriber);
+
     std::thread thread_ = std::thread(&GreeterClient::AsyncCompleteRpc, &greeter);
+
     greeter.SayHello("world");
-    // greeter.GladToSeeMe("client");
-    // greeter.GladToSeeYou();
-    // greeter.BothGladToSee();
+    greeter.GladToSeeMe("client");
+    greeter.GladToSeeYou();
+    greeter.BothGladToSee();
     greeter.Subscribe("me");
+
     thread_.join();
 }
 
