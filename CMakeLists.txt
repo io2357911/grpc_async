@@ -25,7 +25,7 @@ grpc_generate_cpp(GRPC_SRCS GRPC_HDRS ${PROTO_SRC_DIR} ${PROTOS})
 
 # Building server
 add_executable(grpc_async_server
-    ${CMAKE_CURRENT_SOURCE_DIR}/grpc_async_server.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/grpc_async_server.cc
     ${PROTO_SRCS}
     ${GRPC_SRCS}
 )
@@ -36,7 +36,7 @@ target_link_libraries(grpc_async_server
 
 # Building client
 add_executable(grpc_async_client
-    ${CMAKE_CURRENT_SOURCE_DIR}/grpc_async_client.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/grpc_async_client.cc
     ${PROTO_SRCS}
     ${GRPC_SRCS}
 )
